@@ -33,7 +33,15 @@ Want to reload songs on the fly? Make some changes (additions, removals, and mod
 
 The keybind can be configured in the mod's config.
 
+## Skip Song
+
+Don't like the current song? Press **F2** (or click the right stick on your controller) to skip to the next track.
+
+The keybind can be configured in the mod's config. *(Idea by goatgirlclover)*
+
 ## Config
+
+BombRushRadio has several configurable options. Experiencing stuttering with a large library? Lower **Max Concurrent Loads**. Want only your custom tracks? Enable **Remove Base Game Songs**.
 
 ```
 ## Settings file was created by plugin BombRushRadio v1.7
@@ -49,6 +57,21 @@ Stream Audio = true
 # Setting type: KeyCode
 # Default value: F1
 Reload Key = F1
+
+## Keybind used for skipping to next song.
+# Setting type: KeyCode
+# Default value: F2
+Skip Key = F2
+
+## Remove all base game songs from the music player.
+# Setting type: Boolean
+# Default value: false
+Remove Base Game Songs = false
+
+## Maximum number of songs to load simultaneously (lower = less stuttering, higher = faster loading)
+# Setting type: Int32
+# Default value: 5
+Max Concurrent Loads = 5
 
 ```
 

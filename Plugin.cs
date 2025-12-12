@@ -16,16 +16,24 @@ namespace BombRushRadio;
 public class BombRushRadio : BaseUnityPlugin
 {
     public static ConfigEntry<KeyCode> ReloadKey;
+    public static ConfigEntry<KeyCode> SkipKey;
+    public static ConfigEntry<KeyCode> SkipKeyController;
+    public static ConfigEntry<bool> RemoveBaseGameSongs;
+    public static ConfigEntry<bool> StreamAudio;
+    public static ConfigEntry<int> MaxConcurrentLoads;
 
     public static MusicPlayer MInstance;
     public static List<MusicTrack> Audios = new();
+    public static Dictionary<string, MusicTrack> AudioLookup = new();
     public int ShouldBeDone;
     public int Done;
+    private int ActiveLoads;
 
     private static readonly List<string> Loaded = new();
 
     public static bool InMainMenu = false;
     public static bool Loading;
+    public static bool Skipping = false;
 
     private readonly AudioType[] _trackerTypes = new[] { AudioType.IT, AudioType.MOD, AudioType.S3M, AudioType.XM };
     private readonly string _songFolder = Path.Combine(Application.streamingAssetsPath, "Mods", "BombRushRadio", "Songs");
@@ -39,50 +47,68 @@ public class BombRushRadio : BaseUnityPlugin
 
         if (Core.Instance.audioManager.musicPlayer != null)
         {
+            var currentTracks = MInstance.musicTrackQueue.currentMusicTracks;
+            var loadedSet = new HashSet<string>(Loaded);
             var toRemove = new List<MusicTrack>();
 
             int idx = 0;
 
             foreach (MusicTrack tr in Audios)
             {
-                if (MInstance.musicTrackQueue.currentMusicTracks.Contains(tr))
+                if (currentTracks.Contains(tr))
                 {
-                    MInstance.musicTrackQueue.currentMusicTracks.Remove(tr);
+                    currentTracks.Remove(tr);
                 }
                 else
                 {
                     Logger.LogInfo("[BRR] Adding " + tr.Title);
                 }
 
-                if (Loaded.FirstOrDefault(l => l == Helpers.FormatMetadata(new[] { tr.Artist, tr.Title }, "dash")) == null)
+                string trackKey = Helpers.FormatMetadata(new[] { tr.Artist, tr.Title }, "dash");
+                
+                if (!loadedSet.Contains(trackKey))
                 {
                     Logger.LogInfo("[BRR] Removing " + tr.Title);
                     toRemove.Add(tr);
                 }
 
-                MInstance.musicTrackQueue.currentMusicTracks.Insert(1 + idx, tr);
+                currentTracks.Insert(1 + idx, tr);
                 idx++;
             }
 
             foreach (MusicTrack tr in toRemove)
             {
                 Audios.Remove(tr);
-                tr.AudioClip.UnloadAudioData();
+                AudioLookup.Remove($"{tr.Artist}|{tr.Title}");
+                if (tr.AudioClip != null)
+                {
+                    tr.AudioClip.UnloadAudioData();
+                }
             }
         }
     }
 
     public IEnumerator LoadAudioFile(string filePath, AudioType type)
     {
-        string[] metadata = Helpers.GetMetadata(filePath, false);
+        while (ActiveLoads >= MaxConcurrentLoads.Value)
+        {
+            yield return null;
+        }
 
+        ActiveLoads++;
+
+        string[] metadata = Helpers.GetMetadata(filePath, false);
         string songName = Helpers.FormatMetadata(metadata, "dash");
+        string songKey = $"{metadata[0]}|{metadata[1]}";
 
         // Escape special characters so we don't get an HTML error when we send the request
         filePath = UnityWebRequest.EscapeURL(filePath);
 
         using (UnityWebRequest www = UnityWebRequestMultimedia.GetAudioClip("file:///" + filePath, type))
         {
+            var downloadHandler = (DownloadHandlerAudioClip) www.downloadHandler;
+            downloadHandler.streamAudio = StreamAudio.Value && !_trackerTypes.Contains(type);
+
             yield return www.SendWebRequest();
 
             if (www.result == UnityWebRequest.Result.ConnectionError)
@@ -94,33 +120,33 @@ public class BombRushRadio : BaseUnityPlugin
                 Done++;
 
                 MusicTrack musicTrack = ScriptableObject.CreateInstance<MusicTrack>();
-                musicTrack.AudioClip = null;
                 musicTrack.Artist = metadata[0];
                 musicTrack.Title = metadata[1];
                 musicTrack.isRepeatable = false;
 
-                var downloadHandler = (DownloadHandlerAudioClip) www.downloadHandler;
-                downloadHandler.streamAudio = !_trackerTypes.Contains(type);
-
                 AudioClip myClip = downloadHandler.audioClip;
-                myClip.name = filePath;
+                myClip.name = songName;
 
                 musicTrack.AudioClip = myClip;
 
                 Audios.Add(musicTrack);
+                AudioLookup[songKey] = musicTrack;
 
                 Logger.LogInfo($"[BRR] Loaded {Helpers.FormatMetadata(metadata, "by")} ({Done}/{ShouldBeDone})");
                 Loaded.Add(songName);
             }
         }
+
+        ActiveLoads--;
     }
 
     public IEnumerator LoadFile(string f)
     {
         string extension = Path.GetExtension(f).ToLowerInvariant().Substring(1);
         string[] metadata = Helpers.GetMetadata(f, false);
+        string songKey = $"{metadata[0]}|{metadata[1]}";
 
-        if (Audios.Find(m => m.Artist == metadata[0] && m.Title == metadata[1]))
+        if (AudioLookup.ContainsKey(songKey))
         {
             string songName = Helpers.FormatMetadata(metadata, "dash");
             Loaded.Add(songName);
@@ -169,10 +195,37 @@ public class BombRushRadio : BaseUnityPlugin
         yield return null;
     }
 
+    public IEnumerator SkipTrack()
+    {
+        int currentIndex = MInstance.CurrentTrackIndex;
+        int totalTracks = MInstance.musicTrackQueue.AmountOfTracks;
+        
+        Logger.LogInfo($"[BRR] Skip requested - current index: {currentIndex}/{totalTracks}");
+        Logger.LogInfo($"[BRR] Current track: {MInstance.GetMusicTrack(currentIndex)?.Title}");
+        Logger.LogInfo($"[BRR] Is playing: {MInstance.IsPlaying}");
+        
+        Skipping = true;
+        
+        // goatgirl's approach: pause then PlayNext
+        Logger.LogInfo($"[BRR] Calling ForcePaused...");
+        MInstance.ForcePaused();
+        
+        Logger.LogInfo($"[BRR] Calling PlayNext...");
+        MInstance.PlayNext();
+        
+        Logger.LogInfo($"[BRR] Waiting before clearing skip flag...");
+        yield return new WaitForSeconds(0.3f);
+        Skipping = false;
+        
+        Logger.LogInfo($"[BRR] Skip complete, new index: {MInstance.CurrentTrackIndex}");
+    }
+
     public IEnumerator ReloadSongs()
     {
         Loaded.Clear();
+        AudioLookup.Clear();
         Loading = true;
+        ActiveLoads = 0;
 
         if (Audios.Count > 0)
         {
@@ -188,12 +241,21 @@ public class BombRushRadio : BaseUnityPlugin
 
         yield return StartCoroutine(SearchDirectories());
 
+        while (ActiveLoads > 0)
+        {
+            yield return null;
+        }
+
         Logger.LogInfo("[BRR] TOTAL SONGS LOADED: " + Audios.Count);
 
         Logger.LogInfo("[BRR] Bomb Rush Radio has been loaded!");
         Loading = false;
 
-        Audios.Sort((t, t2) => string.Compare(t.AudioClip.name, t2.AudioClip.name, StringComparison.OrdinalIgnoreCase));
+        Audios.Sort((t1, t2) => 
+        {
+            int artistCompare = string.Compare(t1.Artist, t2.Artist, StringComparison.OrdinalIgnoreCase);
+            return artistCompare != 0 ? artistCompare : string.Compare(t1.Title, t2.Title, StringComparison.OrdinalIgnoreCase);
+        });
 
         SanitizeSongs();
     }
@@ -208,6 +270,11 @@ public class BombRushRadio : BaseUnityPlugin
 
         // bind to config
         ReloadKey = Config.Bind("Settings", "Reload Key", KeyCode.F1, "Keybind used for reloading songs.");
+        SkipKey = Config.Bind("Settings", "Skip Key", KeyCode.F2, "Keybind used for skipping to next song.");
+        SkipKeyController = Config.Bind("Settings", "Skip Key (Controller)", KeyCode.JoystickButton9, "Controller button for skipping to next song. R3/Right Stick Click is usually JoystickButton9.");
+        RemoveBaseGameSongs = Config.Bind("Settings", "Remove Base Game Songs", false, "Remove all base game songs from the music player.");
+        StreamAudio = Config.Bind("Settings", "Stream Audio", true, "Whether to stream audio from disk or load at runtime (Streaming is faster but more CPU intensive)");
+        MaxConcurrentLoads = Config.Bind("Settings", "Max Concurrent Loads", 5, "Maximum number of songs to load simultaneously (lower = less stuttering, higher = faster loading)");
 
         // load em
         StartCoroutine(ReloadSongs());
@@ -221,6 +288,16 @@ public class BombRushRadio : BaseUnityPlugin
             if (Input.GetKeyDown(ReloadKey.Value) && !InMainMenu) // reload songs
             {
                 StartCoroutine(ReloadSongs());
+            }
+
+            // skip to next song - idea by goatgirl
+            if ((Input.GetKeyDown(SkipKey.Value) || Input.GetKeyDown(SkipKeyController.Value)) && !InMainMenu)
+            {
+                if (MInstance != null && MInstance.IsPlaying && !Skipping)
+                {
+                    Logger.LogInfo("[BRR] Skipping track...");
+                    StartCoroutine(SkipTrack());
+                }
             }
         };
     }

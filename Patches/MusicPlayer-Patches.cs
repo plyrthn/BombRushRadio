@@ -2,6 +2,7 @@
 using Reptile;
 using Reptile.Phone;
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace BombRushRadio;
@@ -61,34 +62,48 @@ public class MusicPlayer_Patches_RefreshMusicQueueForStage
     {
         __instance.musicTrackQueue.ClearTracks();
 
-        Story.ObjectiveInfo currentObjectiveInfo = Story.GetCurrentObjectiveInfo();
-        if (stage == Stage.hideout)
+        if (!BombRushRadio.RemoveBaseGameSongs.Value)
         {
-            MusicTrack musicTrackByID = Core.Instance.AudioManager.MusicLibraryPlayer.GetMusicTrackByID(MusicTrackID.Hideout_Mixtape);
-            __instance.AddMusicTrack(musicTrackByID);
-            Debug.Log("[BRR] [BASE-GAME] Added " + musicTrackByID.Title + " to the total list.");
+            Story.ObjectiveInfo currentObjectiveInfo = Story.GetCurrentObjectiveInfo();
+            if (stage == Stage.hideout)
+            {
+                MusicTrack musicTrackByID = Core.Instance.AudioManager.MusicLibraryPlayer.GetMusicTrackByID(MusicTrackID.Hideout_Mixtape);
+                __instance.AddMusicTrack(musicTrackByID);
+                Debug.Log("[BRR] [BASE-GAME] Added " + musicTrackByID.Title + " to the total list.");
+            }
+            else
+            {
+                MusicTrack chapterMusic2 = chapterMusic.GetChapterMusic(currentObjectiveInfo.chapter);
+                __instance.AddMusicTrack(chapterMusic2);
+                Debug.Log("[BRR] [BASE-GAME] Added " + chapterMusic2.Title + " to the total list.");
+            }
+            AUnlockable[] unlockables = WorldHandler.instance.GetCurrentPlayer().phone.GetAppInstance<AppMusicPlayer>().Unlockables;
+            for (int i = 0; i < unlockables.Length; i++)
+            {
+                var musicTrack = unlockables[i] as MusicTrack;
+                if (Core.Instance.Platform.User.GetUnlockableSaveDataFor(musicTrack).IsUnlocked)
+                {
+                    musicTrack.isRepeatable = false;
+                    __instance.AddMusicTrack(musicTrack);
+                    Debug.Log("[BRR] [BASE-GAME] Added " + musicTrack.Title + " to the total list.");
+                }
+            }
         }
         else
         {
-            MusicTrack chapterMusic2 = chapterMusic.GetChapterMusic(currentObjectiveInfo.chapter);
-            __instance.AddMusicTrack(chapterMusic2);
-            Debug.Log("[BRR] [BASE-GAME] Added " + chapterMusic2.Title + " to the total list.");
+            Debug.Log("[BRR] Base game songs removed per config setting.");
         }
-        AUnlockable[] unlockables = WorldHandler.instance.GetCurrentPlayer().phone.GetAppInstance<AppMusicPlayer>().Unlockables;
-        for (int i = 0; i < unlockables.Length; i++)
+
+        var existingTracks = new HashSet<string>();
+        foreach (var track in __instance.musicTrackQueue.currentMusicTracks)
         {
-            var musicTrack = unlockables[i] as MusicTrack;
-            if (Core.Instance.Platform.User.GetUnlockableSaveDataFor(musicTrack).IsUnlocked)
-            {
-                musicTrack.isRepeatable = false;
-                __instance.AddMusicTrack(musicTrack);
-                Debug.Log("[BRR] [BASE-GAME] Added " + musicTrack.Title + " to the total list.");
-            }
+            existingTracks.Add($"{track.Artist}|{track.Title}");
         }
 
         foreach (MusicTrack track in BombRushRadio.Audios)
         {
-            if (__instance.musicTrackQueue.currentMusicTracks.Find(m => m.Title == track.Title && m.Artist == track.Artist) != null)
+            string trackKey = $"{track.Artist}|{track.Title}";
+            if (existingTracks.Contains(trackKey))
             {
                 continue;
             }
@@ -124,7 +139,8 @@ public class MusicTrackQueue_Patches
 {
     static bool Prefix(MusicTrack musicTrack) // ignore unlocking for custom stuff
     {
-        if (BombRushRadio.Audios.Find(m => musicTrack.Artist == m.Artist && musicTrack.Title == m.Title))
+        string trackKey = $"{musicTrack.Artist}|{musicTrack.Title}";
+        if (BombRushRadio.AudioLookup.ContainsKey(trackKey))
         {
             return false;
         }
@@ -138,8 +154,13 @@ public class MusicTrackQueue_Patches_SelectNextTrack
 {
     static bool Prefix(MusicTrackQueue __instance)
     {
-        Debug.Log("[BRR] Finding next track. Amount: " + __instance.AmountOfTracks);
+        Debug.Log($"[BRR] SelectNextTrack called - current index: {__instance.currentTrackIndex}, total tracks: {__instance.AmountOfTracks}");
         return true;
+    }
+    
+    static void Postfix(MusicTrackQueue __instance)
+    {
+        Debug.Log($"[BRR] SelectNextTrack done - new index: {__instance.currentTrackIndex}");
     }
 }
 
@@ -175,5 +196,20 @@ public class MusicPlayer_Patches_PlayFrom
     static void Prefix(MusicPlayer __instance)
     {
         __instance.ForcePaused();
+    }
+}
+
+[HarmonyPatch(typeof(MusicPlayer), nameof(MusicPlayer.EvaluateRepeatingMusicTrack))]
+public class MusicPlayer_Patches_EvaluateRepeatingMusicTrack
+{
+    static void Postfix(ref bool __result)
+    {
+        Debug.Log($"[BRR] EvaluateRepeatingMusicTrack called - result: {__result}, Skipping: {BombRushRadio.Skipping}");
+        
+        if (BombRushRadio.Skipping)
+        {
+            Debug.Log("[BRR] Skipping is true, forcing __result to false");
+            __result = false;
+        }
     }
 }
