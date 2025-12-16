@@ -39,6 +39,8 @@ Don't like the current song? Press **F2** (or click the right stick on your cont
 
 The keybind can be configured in the mod's config. *(Idea by goatgirlclover)*
 
+#### Warning: For reasons I can't explain the right stick option works on some machines perfectly and others it requires a controller reconnect. This matches the situation with "MusicCurator".
+
 ## Config
 
 BombRushRadio has several configurable options. Experiencing stuttering with a large library? Lower **Max Concurrent Loads**. Want only your custom tracks? Enable **Remove Base Game Songs**.
