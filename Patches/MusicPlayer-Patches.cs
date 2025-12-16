@@ -154,13 +154,8 @@ public class MusicTrackQueue_Patches_SelectNextTrack
 {
     static bool Prefix(MusicTrackQueue __instance)
     {
-        Debug.Log($"[BRR] SelectNextTrack called - current index: {__instance.currentTrackIndex}, total tracks: {__instance.AmountOfTracks}");
+        Debug.Log("[BRR] Finding next track. Amount: " + __instance.AmountOfTracks);
         return true;
-    }
-    
-    static void Postfix(MusicTrackQueue __instance)
-    {
-        Debug.Log($"[BRR] SelectNextTrack done - new index: {__instance.currentTrackIndex}");
     }
 }
 
@@ -204,11 +199,13 @@ public class MusicPlayer_Patches_EvaluateRepeatingMusicTrack
 {
     static void Postfix(ref bool __result)
     {
-        Debug.Log($"[BRR] EvaluateRepeatingMusicTrack called - result: {__result}, Skipping: {BombRushRadio.Skipping}");
+        if (BombRushRadio.Skipping)
+        {
+            Debug.Log($"[BRR] EvaluateRepeatingMusicTrack - was {__result}, forcing to false because skipping");
+        }
         
         if (BombRushRadio.Skipping)
         {
-            Debug.Log("[BRR] Skipping is true, forcing __result to false");
             __result = false;
         }
     }

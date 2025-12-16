@@ -38,6 +38,14 @@ public class BombRushRadio : BaseUnityPlugin
     private readonly AudioType[] _trackerTypes = new[] { AudioType.IT, AudioType.MOD, AudioType.S3M, AudioType.XM };
     private readonly string _songFolder = Path.Combine(Application.streamingAssetsPath, "Mods", "BombRushRadio", "Songs");
 
+    [System.Diagnostics.Conditional("DEBUG")]
+    private void DebugLog(string message)
+    {
+        Logger.LogInfo(message);
+    }
+
+    public int TotalFileCount;
+
     public void SanitizeSongs()
     {
         if (Core.Instance == null || Core.Instance.audioManager == null)
@@ -96,6 +104,7 @@ public class BombRushRadio : BaseUnityPlugin
         }
 
         ActiveLoads++;
+        DebugLog($"[BRR] Starting load (active: {ActiveLoads}/{MaxConcurrentLoads.Value}): {Path.GetFileName(filePath)}");
 
         string[] metadata = Helpers.GetMetadata(filePath, false);
         string songName = Helpers.FormatMetadata(metadata, "dash");
@@ -138,6 +147,7 @@ public class BombRushRadio : BaseUnityPlugin
         }
 
         ActiveLoads--;
+        DebugLog($"[BRR] Finished load (active: {ActiveLoads}/{MaxConcurrentLoads.Value})");
     }
 
     public IEnumerator LoadFile(string f)
@@ -150,7 +160,17 @@ public class BombRushRadio : BaseUnityPlugin
         {
             string songName = Helpers.FormatMetadata(metadata, "dash");
             Loaded.Add(songName);
-            Logger.LogInfo("[BRR] " + songName + " is already loaded, skipping.");
+            
+            // prefer MP3 over other formats
+            if (extension == "ogg" || extension == "flac" || extension == "wav")
+            {
+                Logger.LogInfo("[BRR] " + songName + " is already loaded, deleting duplicate " + extension.ToUpper() + " file.");
+                File.Delete(f);
+            }
+            else
+            {
+                Logger.LogInfo("[BRR] " + songName + " is already loaded, skipping.");
+            }
         }
         else
         {
@@ -197,31 +217,21 @@ public class BombRushRadio : BaseUnityPlugin
 
     public IEnumerator SkipTrack()
     {
-        int currentIndex = MInstance.CurrentTrackIndex;
-        int totalTracks = MInstance.musicTrackQueue.AmountOfTracks;
-        
-        Logger.LogInfo($"[BRR] Skip requested - current index: {currentIndex}/{totalTracks}");
-        Logger.LogInfo($"[BRR] Current track: {MInstance.GetMusicTrack(currentIndex)?.Title}");
-        Logger.LogInfo($"[BRR] Is playing: {MInstance.IsPlaying}");
+        DebugLog($"[BRR] Skip requested - index: {MInstance.CurrentTrackIndex}/{MInstance.musicTrackQueue.AmountOfTracks}, track: {MInstance.GetMusicTrack(MInstance.CurrentTrackIndex)?.Title}");
         
         Skipping = true;
-        
-        // goatgirl's approach: pause then PlayNext
-        Logger.LogInfo($"[BRR] Calling ForcePaused...");
         MInstance.ForcePaused();
-        
-        Logger.LogInfo($"[BRR] Calling PlayNext...");
         MInstance.PlayNext();
         
-        Logger.LogInfo($"[BRR] Waiting before clearing skip flag...");
         yield return new WaitForSeconds(0.3f);
         Skipping = false;
         
-        Logger.LogInfo($"[BRR] Skip complete, new index: {MInstance.CurrentTrackIndex}");
+        DebugLog($"[BRR] Skip complete - now at index: {MInstance.CurrentTrackIndex}, track: {MInstance.GetMusicTrack(MInstance.CurrentTrackIndex)?.Title}");
     }
 
     public IEnumerator ReloadSongs()
     {
+        DebugLog("[BRR] ===== RELOAD STARTED =====");
         Loaded.Clear();
         AudioLookup.Clear();
         Loading = true;
@@ -241,14 +251,15 @@ public class BombRushRadio : BaseUnityPlugin
 
         yield return StartCoroutine(SearchDirectories());
 
+        DebugLog("[BRR] Waiting for all loads to complete...");
         while (ActiveLoads > 0)
         {
             yield return null;
         }
 
-        Logger.LogInfo("[BRR] TOTAL SONGS LOADED: " + Audios.Count);
-
+        Logger.LogInfo($"[BRR] TOTAL SONGS LOADED: {Audios.Count}");
         Logger.LogInfo("[BRR] Bomb Rush Radio has been loaded!");
+        DebugLog("[BRR] ===== RELOAD COMPLETE =====");
         Loading = false;
 
         Audios.Sort((t1, t2) => 
@@ -282,23 +293,30 @@ public class BombRushRadio : BaseUnityPlugin
         var harmony = new Harmony("kade.bombrushradio");
         harmony.PatchAll();
         Logger.LogInfo("[BRR] Patched...");
+    }
 
-        Core.OnUpdate += () =>
+    private void Update()
+    {
+        if (Input.GetKeyDown(ReloadKey.Value) && !InMainMenu)
         {
-            if (Input.GetKeyDown(ReloadKey.Value) && !InMainMenu) // reload songs
-            {
-                StartCoroutine(ReloadSongs());
-            }
+            StartCoroutine(ReloadSongs());
+        }
 
-            // skip to next song - idea by goatgirl
-            if ((Input.GetKeyDown(SkipKey.Value) || Input.GetKeyDown(SkipKeyController.Value)) && !InMainMenu)
+        // skip to next song - idea by goatgirl
+        // only check controller after phone is loaded (means we're actually in game)
+        bool skipPressed = Input.GetKeyUp(SkipKey.Value);
+        if (WorldHandler.instance?.GetCurrentPlayer()?.phone != null)
+        {
+            skipPressed = skipPressed || Input.GetKeyUp(SkipKeyController.Value);
+        }
+        
+        if (skipPressed && !InMainMenu)
+        {
+            DebugLog($"[BRR] Skip button pressed! Skipping: {Skipping}, IsPlaying: {MInstance?.IsPlaying}");
+            if (MInstance != null && MInstance.IsPlaying && !Skipping)
             {
-                if (MInstance != null && MInstance.IsPlaying && !Skipping)
-                {
-                    Logger.LogInfo("[BRR] Skipping track...");
-                    StartCoroutine(SkipTrack());
-                }
+                StartCoroutine(SkipTrack());
             }
-        };
+        }
     }
 }
